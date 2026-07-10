@@ -224,7 +224,7 @@ table.report td.tot, table.report th.tot{font-weight:800;color:var(--teal-800);b
 <script>
 /* ======================= CONFIG ======================= */
 // ⚠️ Reemplaza esta URL por la de tu Google Apps Script Web App (ver INSTRUCCIONES.md)
-const API_URL = "https://script.google.com/macros/s/AKfycbykjlszHd20b9sqI2UsMZQOhsYUlcmaTjY05iYN7NRWbB5X0R-QLGKVa1B_cwpXUr_yAw/exec";
+const API_URL = "PEGA_AQUI_TU_URL_DE_APPS_SCRIPT";
 
 const TURNOS = ["Matutino","Vespertino","Nocturno","Jornada Acumulada Noct/Dom"];
 
@@ -322,6 +322,19 @@ const SECTIONS = [
 ];
 
 const CATEGORY_LABELS = {infusion:"Terapia de Infusión", general:"Productividad General", ocupacion:"Ocupación", actividad:"Actividad"};
+
+const FIELD_LABELS = {};
+SECTIONS.forEach(sec=> sec.groups.forEach(g=> g.fields.forEach(f=>{
+  FIELD_LABELS[f.id] = g.label ? `${g.label} · ${f.label}` : f.label;
+})));
+
+function formatTimestamp(ts){
+  // backend entrega "yyyy-MM-dd HH:mm"
+  if(!ts) return "";
+  const m = String(ts).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  if(!m) return ts;
+  return `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`;
+}
 
 let session = null; // {pin, nombre}
 let pinBuffer = "";
@@ -532,18 +545,26 @@ async function loadHistorial(){
     }
     list.innerHTML = "";
     r.registros.forEach(reg=>{
-      const nonZero = Object.entries(reg.campos).filter(([k,v])=>v>0).length;
+      const detalles = Object.entries(reg.campos)
+        .filter(([k,v])=>v>0)
+        .map(([k,v])=>`${FIELD_LABELS[k]||k}: <strong>${v}</strong>`);
       const div = document.createElement("div");
       div.className = "hist-card";
       div.innerHTML = `
         <div class="hist-top">
           <span class="hist-turno">${reg.turno}</span>
-          <button class="btn-ghost" data-id="${reg.id}">Eliminar</button>
+          <div style="display:flex;gap:14px;">
+            <button class="btn-ghost" style="color:var(--teal-700);" data-pdf="${reg.id}">PDF</button>
+            <button class="btn-ghost" data-id="${reg.id}">Eliminar</button>
+          </div>
         </div>
-        <div class="hist-meta">Capturó: ${reg.nombre} · ${reg.timestamp}</div>
-        <div class="hist-summary">${nonZero} campo(s) con valor mayor a 0</div>
+        <div class="hist-meta">Capturó: ${reg.nombre} · ${formatTimestamp(reg.timestamp)}</div>
+        ${detalles.length
+          ? `<div class="hist-summary">${detalles.join(" · ")}</div>`
+          : `<div class="hist-summary">Sin campos con valor mayor a 0</div>`}
       `;
-      div.querySelector("button").onclick = ()=> deleteRegistro(reg.id);
+      div.querySelector("[data-id]").onclick = ()=> deleteRegistro(reg.id);
+      div.querySelector("[data-pdf]").onclick = ()=> openPDFModal(reg.id);
       list.appendChild(div);
     });
   }catch(e){
@@ -680,6 +701,68 @@ document.getElementById("btnConfig").onclick = async ()=>{
     }catch(e){ showToast("Sin conexión"); }
   };
 };
+
+/* ======================= PDF DEL REGISTRO ======================= */
+function openPDFModal(id){
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `
+    <div class="modal">
+      <button class="close">×</button>
+      <h3>Generar PDF</h3>
+      <p style="font-size:13px;color:var(--ink-soft);margin-top:-6px;">Elige quién firma el Vo. Bo. de este registro.</p>
+      <div class="turno-grid" style="grid-template-columns:1fr;">
+        <button class="turno-btn sel" data-firma="jefa" style="text-align:left;padding:14px;">
+          <strong>M.S.P. Nancy Reyes Compean</strong><br><span style="font-weight:400;">Jefa de Enfermería</span>
+        </button>
+        <button class="turno-btn" data-firma="subjefa" style="text-align:left;padding:14px;">
+          <strong>M.A.H. Cinthya Gabriela de la Fuente Cabrera</strong><br><span style="font-weight:400;">Subjefa de Enfermería</span>
+        </button>
+      </div>
+      <button class="btn-primary" id="pdfGenerar">Generar y descargar PDF</button>
+    </div>`;
+  document.body.appendChild(bg);
+  let firmante = "jefa";
+  bg.querySelectorAll("[data-firma]").forEach(b=>{
+    b.onclick = ()=>{
+      bg.querySelectorAll("[data-firma]").forEach(x=>x.classList.remove("sel"));
+      b.classList.add("sel");
+      firmante = b.dataset.firma;
+    };
+  });
+  bg.querySelector(".close").onclick = ()=> bg.remove();
+  bg.onclick = (e)=>{ if(e.target===bg) bg.remove(); };
+  bg.querySelector("#pdfGenerar").onclick = async ()=>{
+    const btn = bg.querySelector("#pdfGenerar");
+    btn.disabled = true; btn.textContent = "Generando…";
+    try{
+      const r = await api("generarPDF", {id, firmante});
+      if(r.ok){
+        downloadBase64Pdf(r.base64, r.filename);
+        showToast("✓ PDF generado");
+        bg.remove();
+      } else {
+        showToast("No se pudo generar el PDF: "+(r.error||""));
+        btn.disabled = false; btn.textContent = "Generar y descargar PDF";
+      }
+    }catch(e){
+      showToast("Sin conexión, intenta de nuevo");
+      btn.disabled = false; btn.textContent = "Generar y descargar PDF";
+    }
+  };
+}
+function downloadBase64Pdf(base64, filename){
+  const byteChars = atob(base64);
+  const byteNumbers = new Array(byteChars.length);
+  for(let i=0;i<byteChars.length;i++) byteNumbers[i] = byteChars.charCodeAt(i);
+  const byteArray = new Uint8Array(byteNumbers);
+  const blob = new Blob([byteArray], {type:"application/pdf"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename || "registro.pdf";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=> URL.revokeObjectURL(url), 5000);
+}
 
 /* ======================= TOAST ======================= */
 function showToast(msg){
