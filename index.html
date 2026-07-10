@@ -61,7 +61,7 @@ body{
 }
 .keypad button:active{background:var(--teal-100);}
 .keypad .ghost{border:none;box-shadow:none;background:none;}
-.login-error{color:var(--red);font-size:13px;margin-top:14px;min-height:16px;}
+.login-error{color:var(--red);font-size:13px;margin-top:14px;min-height:16px;max-width:280px;line-height:1.4;}
 
 /* ---- Nav ---- */
 .bottomnav{
@@ -89,6 +89,12 @@ select, input[type=date]{
 .turno-btn{padding:12px 6px;border-radius:10px;border:1.5px solid var(--line);background:#fff;font-size:13px;font-weight:600;color:var(--ink-soft);cursor:pointer;}
 .turno-btn.sel{border-color:var(--teal-600);background:var(--teal-100);color:var(--teal-800);}
 
+.banner{border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:13px;display:flex;align-items:center;justify-content:space-between;gap:10px;}
+.banner-open{background:var(--teal-100);color:var(--teal-900);border:1px solid var(--teal-600);}
+.banner-closed{background:#f6ede3;color:var(--amber);border:1px solid var(--amber);}
+.banner-new{background:var(--sand);color:var(--ink-soft);border:1px dashed var(--line);}
+.banner button{border:none;background:none;font-weight:700;font-size:12px;cursor:pointer;color:inherit;text-decoration:underline;flex-shrink:0;}
+
 .section-card{background:#fff;border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:12px;overflow:hidden;border:1px solid var(--line);}
 .section-head{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;cursor:pointer;}
 .section-head h3{margin:0;font-size:14.5px;color:var(--teal-900);}
@@ -102,6 +108,7 @@ select, input[type=date]{
 .field{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid #f0efe9;}
 .field:last-child{border-bottom:none;}
 .field .flabel{font-size:13.5px;color:var(--ink);line-height:1.3;flex:1;}
+.field-badge{font-size:10px;font-weight:700;color:var(--teal-700);background:var(--teal-100);padding:1px 7px;border-radius:9px;white-space:nowrap;}
 .stepper{display:flex;align-items:center;gap:8px;flex-shrink:0;}
 .stepper button{width:30px;height:30px;border-radius:8px;border:1px solid var(--line);background:var(--sand);font-size:16px;color:var(--teal-800);cursor:pointer;font-weight:700;}
 .stepper input{width:44px;text-align:center;border:1px solid var(--line);border-radius:8px;padding:5px 2px;font-size:14px;-moz-appearance:textfield;}
@@ -183,10 +190,13 @@ table.report td.tot, table.report th.tot{font-weight:800;color:var(--teal-800);b
       <label class="small">Turno</label>
       <div class="turno-grid" id="turnoGrid"></div>
 
+      <div id="turnoBanner"></div>
+
       <div id="sectionsWrap"></div>
 
       <div class="save-bar">
-        <button class="btn-primary" id="btnGuardar">Guardar registro del turno</button>
+        <button class="btn-primary" id="btnGuardar">Guardar avance del turno</button>
+        <button class="btn-secondary" id="btnCerrarTurno" style="border-color:var(--red);color:var(--red);">Cerrar turno</button>
       </div>
     </div>
 
@@ -224,9 +234,12 @@ table.report td.tot, table.report th.tot{font-weight:800;color:var(--teal-800);b
 <script>
 /* ======================= CONFIG ======================= */
 // ⚠️ Reemplaza esta URL por la de tu Google Apps Script Web App (ver INSTRUCCIONES.md)
-const API_URL = "https://script.google.com/macros/s/AKfycbykjlszHd20b9sqI2UsMZQOhsYUlcmaTjY05iYN7NRWbB5X0R-QLGKVa1B_cwpXUr_yAw/exec";
+const API_URL = "PEGA_AQUI_TU_URL_DE_APPS_SCRIPT";
 
-const TURNOS = ["Matutino","Vespertino","Nocturno","Jornada Acumulada Noct/Dom"];
+const TURNOS = ["Matutino","Vespertino","Nocturno A","Nocturno B","Jornada Acumulada Diurna","Jornada Acumulada Nocturna"];
+
+// Campos de "última lectura" (censo): NO se suman entre aportaciones, se reemplazan.
+const ABSOLUTE_FIELDS = ["oc_ucin","oc_ucia","oc_hosp"];
 
 const SECTIONS = [
   { id:"infusion", title:"Terapia de Infusión", groups:[
@@ -305,7 +318,7 @@ const SECTIONS = [
       {id:"pg_urgencias",label:"Pacientes atendidos en Urgencias"}
     ]}
   ]},
-  { id:"ocupacion", title:"Ocupación · censo del turno", groups:[
+  { id:"ocupacion", title:"Ocupación · última lectura del censo", groups:[
     { label:null, fields:[
       {id:"oc_ucin",label:"Camas ocupadas · UCIN"},
       {id:"oc_ucia",label:"Camas ocupadas · UCIA"},
@@ -384,7 +397,7 @@ async function doLogin(){
       localStorage.removeItem("dee_session"); // no persistente por seguridad de PIN individual
       showMain();
     } else {
-      document.getElementById("loginError").textContent = "PIN no reconocido, intenta de nuevo.";
+      document.getElementById("loginError").textContent = r.error || "PIN no reconocido, intenta de nuevo.";
       pinBuffer = ""; renderDots();
     }
   }catch(e){
@@ -404,7 +417,9 @@ function showMain(){
   buildSections();
   buildAnioSelect();
   loadHistorial();
+  loadTurnoActual();
 }
+document.getElementById("fecha").onchange = loadTurnoActual;
 document.getElementById("btnLogout").onclick = ()=>{
   session = null; pinBuffer="";
   document.getElementById("mainScreen").classList.add("hidden");
@@ -436,7 +451,7 @@ function buildTurnos(){
     const b = document.createElement("button");
     b.className = "turno-btn" + (t===turnoSel?" sel":"");
     b.textContent = t;
-    b.onclick = ()=>{ turnoSel = t; buildTurnos(); };
+    b.onclick = ()=>{ turnoSel = t; buildTurnos(); loadTurnoActual(); };
     grid.appendChild(b);
   });
 }
@@ -463,9 +478,10 @@ function buildSections(){
       gdiv.className = "group";
       if(g.label) gdiv.innerHTML += `<div class="group-label">${g.label}</div>`;
       g.fields.forEach(f=>{
+        const esAbsoluto = ABSOLUTE_FIELDS.includes(f.id);
         gdiv.innerHTML += `
           <div class="field">
-            <div class="flabel">${f.label}</div>
+            <div class="flabel">${f.label}${esAbsoluto ? "" : ` <span class="field-badge" id="tot_${f.id}">0</span>`}</div>
             <div class="stepper">
               <button type="button" data-step="-1" data-target="${f.id}">−</button>
               <input type="number" min="0" inputmode="numeric" id="f_${f.id}" value="0">
@@ -505,6 +521,78 @@ function resetForm(){
     document.getElementById("f_"+f.id).value = 0;
   })));
 }
+// Después de cargar/guardar: los campos ACUMULABLES siempre vuelven a 0 (representan
+// "lo nuevo que vas a agregar ahora"); los campos de censo (última lectura) muestran
+// el valor actual, porque ahí SÍ editas el número tal cual, no sumas.
+function setFormValues(totales){
+  SECTIONS.forEach(sec=> sec.groups.forEach(g=> g.fields.forEach(f=>{
+    const input = document.getElementById("f_"+f.id);
+    if(ABSOLUTE_FIELDS.includes(f.id)){
+      input.value = totales && totales[f.id]!=null ? totales[f.id] : 0;
+    } else {
+      input.value = 0;
+      const badge = document.getElementById("tot_"+f.id);
+      if(badge) badge.textContent = "llevan " + (totales && totales[f.id]!=null ? totales[f.id] : 0);
+    }
+  })));
+}
+function setFormDisabled(disabled){
+  SECTIONS.forEach(sec=> sec.groups.forEach(g=> g.fields.forEach(f=>{
+    document.getElementById("f_"+f.id).disabled = disabled;
+  })));
+  document.querySelectorAll('#sectionsWrap button[data-step]').forEach(b=> b.disabled = disabled);
+  document.getElementById("btnGuardar").classList.toggle("hidden", disabled);
+  document.getElementById("btnCerrarTurno").classList.toggle("hidden", disabled);
+}
+
+async function loadTurnoActual(){
+  const fecha = document.getElementById("fecha").value;
+  if(!fecha || !session) return;
+  const banner = document.getElementById("turnoBanner");
+  banner.innerHTML = "";
+  try{
+    const r = await api("turnoActual", {fecha, turno:turnoSel});
+    if(!r.ok) return;
+    setFormValues(r.campos);
+    const colaboradores = (r.colaboradores||[]).join(", ");
+    if(r.cerrado){
+      setFormDisabled(true);
+      banner.innerHTML = `
+        <div class="banner banner-closed">
+          <span>🔒 Turno <strong>cerrado</strong> por ${r.cerradoPor||"—"} el ${formatTimestamp(r.cerrado)}. Ya no se puede editar.</span>
+          <button id="btnReabrir">Reabrir</button>
+        </div>`;
+      document.getElementById("btnReabrir").onclick = reabrirTurnoActual;
+    } else {
+      setFormDisabled(false);
+      if(colaboradores){
+        banner.innerHTML = `
+          <div class="banner banner-open">
+            <span>🟢 Turno en curso · capturando: <strong>${colaboradores}</strong> · última actualización ${formatTimestamp(r.ultimaActualizacion)}</span>
+            <button id="btnPdfBanner">PDF</button>
+          </div>`;
+        document.getElementById("btnPdfBanner").onclick = ()=> openPDFModal(fecha, turnoSel);
+      } else {
+        banner.innerHTML = `
+          <div class="banner banner-new">
+            <span>Sin eventos capturados todavía para este turno. Lo que captures ahora abre el turno.</span>
+          </div>`;
+      }
+    }
+  }catch(e){
+    banner.innerHTML = "";
+  }
+}
+
+async function reabrirTurnoActual(){
+  const fecha = document.getElementById("fecha").value;
+  if(!confirm("¿Reabrir este turno para seguir capturando o corregirlo?")) return;
+  try{
+    const r = await api("reabrirTurno", {fecha, turno:turnoSel, pin:session.pin});
+    if(r.ok){ showToast("Turno reabierto"); loadTurnoActual(); }
+    else showToast("No se pudo reabrir: "+(r.error||""));
+  }catch(e){ showToast("Sin conexión"); }
+}
 
 document.getElementById("btnGuardar").onclick = async ()=>{
   const btn = document.getElementById("btnGuardar");
@@ -518,8 +606,8 @@ document.getElementById("btnGuardar").onclick = async ()=>{
   try{
     const r = await api("guardar", {payload: JSON.stringify(payload)});
     if(r.ok){
-      showToast("✓ Registro guardado");
-      resetForm();
+      showToast(r.aporto ? "✓ Aportación guardada" : "Sin cambios que guardar");
+      loadTurnoActual();
       loadHistorial();
     } else {
       showToast("Error al guardar: "+(r.error||""));
@@ -527,7 +615,32 @@ document.getElementById("btnGuardar").onclick = async ()=>{
   }catch(e){
     showToast("Sin conexión, intenta de nuevo");
   }
-  btn.disabled = false; btn.textContent = "Guardar registro del turno";
+  btn.disabled = false; btn.textContent = "Guardar avance del turno";
+};
+
+document.getElementById("btnCerrarTurno").onclick = async ()=>{
+  const fecha = document.getElementById("fecha").value;
+  if(!fecha){ showToast("Selecciona la fecha"); return; }
+  if(!confirm(`¿Cerrar el turno ${turnoSel} del ${fecha}? Ya no se podrá editar sin reabrirlo.`)) return;
+  const btn = document.getElementById("btnCerrarTurno");
+  btn.disabled = true; btn.textContent = "Cerrando…";
+  try{
+    // Guarda el último avance antes de cerrar, por si quedó algo sin guardar
+    const payload = { fecha, turno: turnoSel, pin: session.pin, nombre: session.nombre, campos: collectFormData() };
+    await api("guardar", {payload: JSON.stringify(payload)});
+    const r = await api("cerrarTurno", {fecha, turno:turnoSel, pin:session.pin, nombre:session.nombre});
+    if(r.ok){
+      showToast("✓ Turno cerrado");
+      loadTurnoActual();
+      loadHistorial();
+      openPDFModal(fecha, turnoSel);
+    } else {
+      showToast("No se pudo cerrar: "+(r.error||""));
+    }
+  }catch(e){
+    showToast("Sin conexión, intenta de nuevo");
+  }
+  btn.disabled = false; btn.textContent = "Cerrar turno";
 };
 
 /* ======================= HISTORIAL (hoy) ======================= */
@@ -547,24 +660,39 @@ async function loadHistorial(){
     r.registros.forEach(reg=>{
       const detalles = Object.entries(reg.campos)
         .filter(([k,v])=>v>0)
-        .map(([k,v])=>`${FIELD_LABELS[k]||k}: <strong>${v}</strong>`);
+        .map(([k,v])=>`${FIELD_LABELS[k]||k}: <strong>${ABSOLUTE_FIELDS.includes(k) ? v : "+"+v}</strong>`);
+      const estadoBadge = reg.turnoCerrado
+        ? `<span style="font-size:10px;font-weight:700;color:var(--amber);background:#f6ede3;padding:2px 8px;border-radius:10px;">TURNO CERRADO</span>`
+        : `<span style="font-size:10px;font-weight:700;color:var(--teal-700);background:var(--teal-100);padding:2px 8px;border-radius:10px;">TURNO ABIERTO</span>`;
       const div = document.createElement("div");
       div.className = "hist-card";
       div.innerHTML = `
         <div class="hist-top">
           <span class="hist-turno">${reg.turno}</span>
-          <div style="display:flex;gap:14px;">
-            <button class="btn-ghost" style="color:var(--teal-700);" data-pdf="${reg.id}">PDF</button>
-            <button class="btn-ghost" data-id="${reg.id}">Eliminar</button>
+          <div style="display:flex;gap:14px;align-items:center;">
+            <button class="btn-ghost" style="color:var(--teal-700);" data-pdf="${reg.fecha}|${reg.turno}">PDF</button>
+            ${reg.turnoCerrado
+              ? `<button class="btn-ghost" style="color:var(--amber);" data-reabrir="${reg.fecha}|${reg.turno}">Reabrir turno</button>`
+              : `<button class="btn-ghost" data-id="${reg.id}">Deshacer</button>`}
           </div>
         </div>
-        <div class="hist-meta">Capturó: ${reg.nombre} · ${formatTimestamp(reg.timestamp)}</div>
+        <div class="hist-meta">Aportó: ${reg.nombre} · ${formatTimestamp(reg.timestamp)} &nbsp; ${estadoBadge}</div>
         ${detalles.length
           ? `<div class="hist-summary">${detalles.join(" · ")}</div>`
           : `<div class="hist-summary">Sin campos con valor mayor a 0</div>`}
       `;
-      div.querySelector("[data-id]").onclick = ()=> deleteRegistro(reg.id);
-      div.querySelector("[data-pdf]").onclick = ()=> openPDFModal(reg.id);
+      const delBtn = div.querySelector("[data-id]");
+      if(delBtn) delBtn.onclick = ()=> deleteRegistro(reg.id);
+      const reabrirBtn = div.querySelector("[data-reabrir]");
+      if(reabrirBtn) reabrirBtn.onclick = ()=>{
+        const [f,t] = reabrirBtn.dataset.reabrir.split("|");
+        reabrirDesdeHistorial(f,t);
+      };
+      const pdfBtn = div.querySelector("[data-pdf]");
+      pdfBtn.onclick = ()=>{
+        const [f,t] = pdfBtn.dataset.pdf.split("|");
+        openPDFModal(f,t);
+      };
       list.appendChild(div);
     });
   }catch(e){
@@ -572,11 +700,19 @@ async function loadHistorial(){
   }
 }
 async function deleteRegistro(id){
-  if(!confirm("¿Eliminar este registro? Esta acción no se puede deshacer.")) return;
+  if(!confirm("¿Deshacer esta aportación? Se restará del total del turno. Esta acción no se puede deshacer.")) return;
   try{
     const r = await api("eliminar",{id, pin:session.pin});
-    if(r.ok){ showToast("Registro eliminado"); loadHistorial(); }
-    else showToast("No se pudo eliminar");
+    if(r.ok){ showToast("Aportación eliminada"); loadHistorial(); loadTurnoActual(); }
+    else showToast(r.error || "No se pudo eliminar");
+  }catch(e){ showToast("Sin conexión"); }
+}
+async function reabrirDesdeHistorial(fecha, turno){
+  if(!confirm(`¿Reabrir el turno ${turno} del ${fecha} para corregirlo?`)) return;
+  try{
+    const r = await api("reabrirTurno",{fecha, turno, pin:session.pin});
+    if(r.ok){ showToast("Turno reabierto"); loadHistorial(); loadTurnoActual(); }
+    else showToast(r.error || "No se pudo reabrir");
   }catch(e){ showToast("Sin conexión"); }
 }
 
@@ -702,15 +838,15 @@ document.getElementById("btnConfig").onclick = async ()=>{
   };
 };
 
-/* ======================= PDF DEL REGISTRO ======================= */
-function openPDFModal(id){
+/* ======================= PDF DEL TURNO ======================= */
+function openPDFModal(fecha, turno){
   const bg = document.createElement("div");
   bg.className = "modal-bg";
   bg.innerHTML = `
     <div class="modal">
       <button class="close">×</button>
       <h3>Generar PDF</h3>
-      <p style="font-size:13px;color:var(--ink-soft);margin-top:-6px;">Elige quién firma el Vo. Bo. de este registro.</p>
+      <p style="font-size:13px;color:var(--ink-soft);margin-top:-6px;">Elige quién firma el Vo. Bo. del turno ${turno} (${fecha}).</p>
       <div class="turno-grid" style="grid-template-columns:1fr;">
         <button class="turno-btn sel" data-firma="jefa" style="text-align:left;padding:14px;">
           <strong>M.S.P. Nancy Reyes Compean</strong><br><span style="font-weight:400;">Jefa de Enfermería</span>
@@ -736,7 +872,7 @@ function openPDFModal(id){
     const btn = bg.querySelector("#pdfGenerar");
     btn.disabled = true; btn.textContent = "Generando…";
     try{
-      const r = await api("generarPDF", {id, firmante});
+      const r = await api("generarPDF", {fecha, turno, firmante});
       if(r.ok){
         downloadBase64Pdf(r.base64, r.filename);
         showToast("✓ PDF generado");
